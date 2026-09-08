@@ -12,6 +12,8 @@ Powered by the [`fast-flights`](https://github.com/AWeirdDev/flights) Google Fli
 - Search flights between airports on given dates (one-way or round-trip)
 - Real prices, airlines, per-leg times, duration, plane type, stop counts, carbon emissions
 - Filters: seat class, passengers, currency, language, max stops, max price, exclude basic economy
+- **Resolves every airport code to its name, city and ISO-3166 country** before searching (bundled lookup, ~9.7k airports), and returns that metadata per leg plus a ready-to-read route summary — so the extension/caller always knows the country and airport code with certainty
+- Rejects unknown airport codes with a clear error instead of silently querying the wrong city
 - Returns **structured** results — correct per-direction stop counts, no ad-hoc scripts left behind
 
 ## 📦 Install
@@ -86,6 +88,9 @@ find-flight/
 ├── skills/
 │   └── find-flight/SKILL.md   # portable agent skill
 ├── flight_runner.py           # Python executor (structured JSON)
+├── airports.py                # airport/country lookup (code -> name, city, state, country)
+├── airports.json              # ~9.7k IATA codes -> [name, city, state, ISO-3166 country]
+├── countries.json             # ISO-3166 alpha-2 -> English country name
 ├── examples/
 │   └── search_flights.py      # CLI example
 └── README.md
@@ -93,6 +98,7 @@ find-flight/
 
 ## ⚙️ Notes / limitations
 
+- **Airport & country resolution:** every endpoint code is resolved (name/city/ISO-3166 country) from the bundled lookup before searching; unknown codes error out. `airports.py`+`airports.json`/`countries.json` are regenerated from the upstream list (`AWeirdDev/flights` `enums/airports.csv`).
 - **Round-trip data (verified):** parsed results contain only the **outbound** legs; `price` is the **two-way total**. The tool reports this explicitly.
 - `multi-city` trips are not supported by the upstream library.
 - Scraping Google is subject to rate limits / IP blocks. For heavy use, plug a proxy (BrightData) or richer source (SearchApi) integration into `fast-flights`.

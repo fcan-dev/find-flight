@@ -90,6 +90,28 @@ def total_duration(flight) -> int:
     return sum(seg.duration for seg in flight.flights)
 
 
+def load_airports():
+    """Try to ""import airports"" for city/country metadata; fall back to a no-op."""
+    try:
+        import airports as a
+        return a
+    except Exception:
+        return None
+
+
+AP = load_airports()
+
+
+def place(code: str) -> str:
+    if AP:
+        r = AP.resolve(code)
+        if r["country"]:
+            return f"{code} {r['city']}, {r['country']}".strip()
+        if r["name"]:
+            return f"{code} ({r['name']})"
+    return code
+
+
 def print_result(result: ResultList, currency: str = "") -> None:
     if not result:
         print("No flights found.")
@@ -100,7 +122,7 @@ def print_result(result: ResultList, currency: str = "") -> None:
         for seg in flight.flights:
             dep = f"{seg.departure.date[0]}-{seg.departure.date[1]:02d}-{seg.departure.date[2]:02d} {seg.departure.time[0]:02d}:{seg.departure.time[1]:02d}"
             arr = f"{seg.arrival.date[0]}-{seg.arrival.date[1]:02d}-{seg.arrival.date[2]:02d} {seg.arrival.time[0]:02d}:{seg.arrival.time[1]:02d}"
-            print(f"  {seg.from_airport.code} {dep} -> {seg.to_airport.code} {arr} "
+            print(f"  {place(seg.from_airport.code)} {dep} -> {place(seg.to_airport.code)} {arr} "
                   f"({seg.duration} min, {seg.plane_type})")
     print(f"\n{len(result)} itinerary/ies")
 

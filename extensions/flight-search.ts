@@ -88,11 +88,11 @@ const search_flights = {
 	name: "search_flights",
 	label: "Search Flights",
 	description:
-		"Search real Google Flights availability between two airports on given dates via fast-flights. Returns structured JSON: price (currency), airline(s), number of stops, and each flight leg with airports, times, duration and plane type. For round-trips, price is the two-way total and only the outbound legs are returned. Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
+		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips, price is the two-way total and only the outbound legs are returned. Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
 	promptSnippet: "Search live Google Flights for price/availability between airports",
 	promptGuidelines: [
 		"Use search_flights for real flight prices and availability instead of guessing or writing ad-hoc scraping scripts.",
-		"Before calling search_flights, verify airport codes (from_airport/to_airport must be 3-letter IATA codes) and resolve dates to YYYY-MM-DD; ask the user if the code, trip type, or dates are unclear.",
+		"Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you can confirm a code really means the city the user wants (e.g. ECN = Ercan/Cyprus). Resolve dates to YYYY-MM-DD; ask the user if the code, trip type, or dates are unclear.",
 		"search_flights prices carry the currency you pass; pass a currency (e.g. 'EUR', 'TRY', 'USD') unless the user prefers Google's default.",
 	],
 	parameters: Type.Object({
@@ -137,11 +137,15 @@ const search_flights = {
 		const obj = data as Record<string, unknown>;
 		if (obj.error) throw new Error(`flight search error: ${obj.error}`);
 
+		const route = obj.route as Record<string, unknown> | undefined;
+		const routeSummary = (route?.summary as string | undefined) ?? "";
+		const routeLine = routeSummary ? `\nRoute: ${routeSummary}` : "";
+
 		const flights = (obj.flights ?? []) as Array<Record<string, unknown>>;
 		if (flights.length === 0) {
 			return {
-				content: [{ type: "text", text: "No flights found for this search." }],
-				details: { currency: obj.currency, count: 0 },
+				content: [{ type: "text", text: `No flights found for this search.${routeLine}` }],
+				details: { currency: obj.currency, route, count: 0 },
 			};
 		}
 		flights.sort((a, b) => Number(a.price) - Number(b.price));
@@ -151,20 +155,20 @@ const search_flights = {
 			const legs = (f.legs as Array<Record<string, string>>) ?? [];
 			const seg = legs.map(
 				(l) =>
-					`${l.from} ${l.departure} → ${l.to} ${l.arrival} ${l.date} (${Math.round(
-						(Number(l.duration_minutes) || 0) / 60,
-					)}h, ${l.plane})`,
+					`${l.from} (${l.from_city ?? ""}, ${l.from_country ?? ""}) ${l.departure} → ` +
+					`${l.to} (${l.to_city ?? ""}, ${l.to_country ?? ""}) ${l.arrival} ${l.date} ` +
+					`(${Math.round((Number(l.duration_minutes) || 0) / 60)}h, ${l.plane})`,
 			).join(", ");
 			const rt = f.is_round_trip ? " (round-trip total)" : "";
 			const airline = (f.airlines as string[] | undefined)?.join("/") ?? "";
 			const stops = Number(f.stops) || 0;
 			return `${i + 1}. ${f.currency} ${f.price}${rt} · ${airline} · ${stops === 0 ? "direct" : `${stops} stop`}\n   ${seg}`;
 		});
-		const summary = `${lines.join("\n")}\n\n${flights.length} itinerary/ies (showing cheapest ${top.length})`;
+		const summary = `${lines.join("\n")}\n\n${flights.length} itinerary/ies (showing cheapest ${top.length})${routeLine}`;
 
 		return {
 			content: [{ type: "text", text: summary }],
-			details: { currency: obj.currency, flights },
+			details: { currency: obj.currency, route, flights },
 		};
 	},
 };

@@ -35,7 +35,11 @@ pip install fast-flights
    ```
    Then resolve relative/ambiguous dates ("next Friday", "11-13 September") against this real year. Format every date as `YYYY-MM-DD`.
 2. **Confirm one-way vs round-trip.** If the user didn't explicitly say, ASK: one-way (1 leg, needs only `date`+`from`+`to`) vs round-trip (2+ legs, needs a `return_date` too). Do not assume. If a stay duration or "until" date is given, that implies round-trip — but still confirm the dates.
-3. **Verify the airport codes — never guess what a 3-letter IATA code means.** Models routinely map codes to the wrong city (e.g. misreading `ECN` as Edinburgh when it is really Ercan, or inventing a code). Before searching, confirm what `from_airport`/`to_airport` actually are: look the code up in the upstream airport list (`enums/airports.csv` in `AWeirdDev/flights`, ~9.7k rows, by code + name) or against a known route. If you can't verify a code, ask the user instead of assuming.
+3. **Verify the airport codes — never guess what a 3-letter IATA code means.** Models routinely map codes to the wrong city (e.g. misreading `ECN` as Edinburgh when it is really Ercan, or inventing a code). Before searching, confirm what `from_airport`/`to_airport` actually are: look the code up in the upstream airport list (`enums/airports.csv` in `AWeirdDev/flights`, ~9.7k rows, by code + name + country) or against a known route. If you can't verify a code, ask the user instead of assuming.
+
+   **Country & airport awareness is built into the tools in this package.** The `search_flights` tool and `flight_runner.py` bundle a code → (airport name, city, state, ISO-3166 country) lookup (`airports.py` + `airports.json`/`countries.json`). Every search resolves both endpoint codes to their city and country **before** calling Google Flights, rejects an unknown code with a clear error, and returns per-leg `*_city`, `*_state`, `*_country` and `*_country_name` fields plus a human-readable `route.summary` (e.g. `IST Istanbul, Turkey -> ECN Nicosia, Cyprus`). So the agent never has to guess a code's meaning — the tool surfaces it.
+
+   Still treat output resolution as a *cross-check*, not a replacement for intent: an ambiguous request (e.g. user says "St. John's" but a code resolves elsewhere) should still be confirmed against the user's intent.
 
 ## Core Recipe — structured query
 
@@ -135,6 +139,8 @@ for flight in result:
         leg.plane_type     # str
 ```
 
+**Country & airport codes (the bundled tools add these).** When you call `search_flights` or `flight_runner.py` (not raw fast-flights), each leg is enriched with the resolved airport metadata from the bundled lookup — `from_city`, `from_state`, `from_country` (ISO-3166 alpha-2), `from_country_name`, and the matching `to_*` fields — plus `from_name`/`to_name`. A top-level `route` object gives both endpoints' resolved metadata and a ready-to-read `route.summary` like `IST Istanbul, Turkey -> ECN Nicosia, Cyprus`. This is how the agent knows the country and airport code with certainty instead of guessing.
+
 **Currency is NOT attached to prices.** `flight.price` is a bare `int` with no currency symbol or code. The currency that the price is quoted in is whatever you passed to `create_query(currency=...)` (or Google's default if you passed `""` — often the local currency, e.g. Turkish Lira for a Turkey-originating route). When presenting prices, surface the currency explicitly: track the `currency` you passed (or the user's expected currency) and label every price with it. Never hardcode a currency symbol in your output format — it may not match the price's actual currency.
 
 **Round-trip: `price` is the total, but only OUTBOUND legs are returned (verified).** For a `round-trip` query, `flight.flights` contains **only the outbound legs** — the parsed data does not include return-leg detail. `flight.price` is the **two-way total fare**. So: count stops and display legs from `flight.flights` as the outbound itinerary, and tell the user that `price` covers both directions but only outbound flight times are available. Do NOT invent or assume return-leg segments that aren't in the data.
@@ -193,7 +199,7 @@ best = result[0]                         # or result[:3] for top-N
 | Expecting `multi-city` to work | Unimplemented — treat as not supported today |
 | Passing `airlines` to multiple legs expecting per-leg filtering | Only first leg's `airlines` is applied |
 | Assuming 24h timestamps | Times are `(hour, minute)` on a 0–23 clock |
-| Guessing what a 3-letter airport code means | Verify it against the upstream `enums/airports.csv` (or a known route) before searching |
+| Guessing what a 3-letter airport code means | Verify it against the upstream `enums/airports.csv` (or a known route) before searching; the bundled `search_flights` tool resolves codes to city + country for you |
 | Hardcoding a currency symbol in output | `price` has no currency — track/pass `currency` and label prices with it |
 | Assuming return legs are in the round-trip data | `flights` holds only outbound legs; `price` is the two-way total — label it as such |
 
