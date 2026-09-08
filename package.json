@@ -1,0 +1,25 @@
+{
+  "name": "find-flight",
+  "version": "0.1.0",
+  "description": "Google Flights search for agents — a pi extension (search_flights tool) + portable skill, powered by the fast-flights scraper.",
+  "keywords": [
+    "pi-package",
+    "flights",
+    "google-flights",
+    "travel",
+    "flight-search",
+    "fast-flights",
+    "trip"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
