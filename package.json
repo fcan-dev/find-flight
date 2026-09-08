@@ -13,6 +13,22 @@
   ],
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fcan-dev/find-flight.git"
+  },
+  "homepage": "https://github.com/fcan-dev/find-flight#readme",
+  "bugs": {
+    "url": "https://github.com/fcan-dev/find-flight/issues"
+  },
+  "files": [
+    "extensions/",
+    "skills/",
+    "flight_runner.py",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"]
