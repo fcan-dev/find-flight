@@ -29,6 +29,13 @@
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "verify": "python3 -c \"import json,sys; from pathlib import Path; Path('flight_runner.py')\" && python3 -m py_compile flight_runner.py && echo \"runner OK\"",
+    "prepublishOnly": "npm run verify"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"]
