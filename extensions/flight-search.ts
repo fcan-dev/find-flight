@@ -88,7 +88,7 @@ const search_flights = {
 	name: "search_flights",
 	label: "Search Flights",
 	description:
-		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips, price is the two-way total and only the outbound legs are returned. Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
+		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips it runs two directional searches and returns BOTH the outbound and return legs (each with its own price and route). Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
 	promptSnippet: "Search live Google Flights for price/availability between airports",
 	promptGuidelines: [
 		"Use search_flights for real flight prices and availability instead of guessing or writing ad-hoc scraping scripts.",
@@ -137,38 +137,83 @@ const search_flights = {
 		const obj = data as Record<string, unknown>;
 		if (obj.error) throw new Error(`flight search error: ${obj.error}`);
 
-		const route = obj.route as Record<string, unknown> | undefined;
-		const routeSummary = (route?.summary as string | undefined) ?? "";
-		const routeLine = routeSummary ? `\nRoute: ${routeSummary}` : "";
+		const currency = (obj.currency as string | undefined) ?? "";
 
-		const flights = (obj.flights ?? []) as Array<Record<string, unknown>>;
-		if (flights.length === 0) {
+		// Human-friendly duration: show minutes too when under 2h (e.g. 1h 35m).
+		const fmtDuration = (min: number) => {
+			const m = Math.round(min || 0);
+			const h = Math.floor(m / 60);
+			const r = m % 60;
+			return h > 0 ? `${h}h${r ? ` ${r}m` : ""}` : `${r}m`;
+		};
+
+		// Render one direction of flights (outbound or return).
+		const renderDirection = (
+			label: string,
+			flights: Array<Record<string, unknown>>,
+			routeSummary?: string,
+		) => {
+			const sorted = [...flights].sort((a, b) => Number(a.price) - Number(b.price));
+			const top = sorted.slice(0, 10);
+			const header = `## ${label}${routeSummary ? ` — ${routeSummary}` : ""}`;
+			if (top.length === 0) return `${header}\nNo ${label.toLowerCase()} flights found.`;
+			const lines = top.map((f, i) => {
+				const legs = (f.legs as Array<Record<string, string>>) ?? [];
+				const where = (l: Record<string, string>, prefix: "from" | "to") => {
+					const code = l[prefix];
+					const city = l[`${prefix}_city`] ?? "";
+					const country = l[`${prefix}_country`] ?? "";
+					const ctx = city || country ? ` (${city}, ${country})` : "";
+					return `${code}${ctx}`;
+				};
+				const seg = legs
+					.map(
+						(l) =>
+							`${where(l, "from")} ${l.departure} → ${where(l, "to")} ${l.arrival} ${l.date} ` +
+						`(${fmtDuration(Number(l.duration_minutes) || 0)}, ${l.plane})`,
+					)
+					.join(", ");
+				const airline = (f.airlines as string[] | undefined)?.join("/") ?? "";
+				const stops = Number(f.stops) || 0;
+				return `${i + 1}. ${f.currency ?? currency} ${f.price} · ${airline} · ${stops === 0 ? "direct" : `${stops} stop${stops > 1 ? "s" : ""}`}\n   ${seg}`;
+			});
+			return `${header}\n${lines.join("\n")}\n\n${sorted.length} itinerary/ies (showing cheapest ${top.length})`;
+		};
+
+		// ---- round-trip: two directional searches, both legs shown ----
+		if (obj.trip === "round-trip") {
+			const outbound = (obj.outbound ?? []) as Array<Record<string, unknown>>;
+			const ret = (obj.return ?? []) as Array<Record<string, unknown>>;
+			const or = obj.outbound_route as Record<string, unknown> | undefined;
+			const rr = obj.return_route as Record<string, unknown> | undefined;
+			const outboundSummary = (or?.summary as string | undefined) ?? "";
+			const returnSummary = (rr?.summary as string | undefined) ?? "";
+			const parts: string[] = [];
+			parts.push(renderDirection("Outbound", outbound, outboundSummary));
+			parts.push(renderDirection("Return", ret, returnSummary));
+			const text = parts.join("\n\n");
 			return {
-				content: [{ type: "text", text: `No flights found for this search.${routeLine}` }],
-				details: { currency: obj.currency, route, count: 0 },
+				content: [{ type: "text", text }],
+				details: {
+					currency,
+					trip: "round-trip",
+					outbound_route: or,
+					return_route: rr,
+					outbound,
+					return: ret,
+				},
 			};
 		}
-		flights.sort((a, b) => Number(a.price) - Number(b.price));
-		const top = flights.slice(0, 10);
 
-		const lines = top.map((f, i) => {
-			const legs = (f.legs as Array<Record<string, string>>) ?? [];
-			const seg = legs.map(
-				(l) =>
-					`${l.from} (${l.from_city ?? ""}, ${l.from_country ?? ""}) ${l.departure} → ` +
-					`${l.to} (${l.to_city ?? ""}, ${l.to_country ?? ""}) ${l.arrival} ${l.date} ` +
-					`(${Math.round((Number(l.duration_minutes) || 0) / 60)}h, ${l.plane})`,
-			).join(", ");
-			const rt = f.is_round_trip ? " (round-trip total)" : "";
-			const airline = (f.airlines as string[] | undefined)?.join("/") ?? "";
-			const stops = Number(f.stops) || 0;
-			return `${i + 1}. ${f.currency} ${f.price}${rt} · ${airline} · ${stops === 0 ? "direct" : `${stops} stop`}\n   ${seg}`;
-		});
-		const summary = `${lines.join("\n")}\n\n${flights.length} itinerary/ies (showing cheapest ${top.length})${routeLine}`;
-
+		// ---- one-way (and legacy flat shape) ----
+		const route = obj.route as Record<string, unknown> | undefined;
+		const routeSummary = (route?.summary as string | undefined) ?? "";
+		const flights = (obj.flights ?? []) as Array<Record<string, unknown>>;
+		const rendered = renderDirection("Flights", flights, routeSummary);
+		const text = `${rendered}\n\nRoute: ${routeSummary}`;
 		return {
-			content: [{ type: "text", text: summary }],
-			details: { currency: obj.currency, route, flights },
+			content: [{ type: "text", text }],
+			details: { currency, trip: "one-way", route, flights },
 		};
 	},
 };

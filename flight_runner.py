@@ -21,16 +21,24 @@ Query keys (all optional unless noted):
 Errors are reported as JSON with {"error": "..."} and a non-zero exit code, so
 the caller can distinguish "no flights" (valid empty result) from a failure.
 
-Output shape (ResultList -> list):
-  [{ "price": int, "currency": str, "is_round_trip": bool, "airlines": [..],
-     "type": str, "carbon": {"typical_on_route": int, "emission": int},
-     "stops": int, "legs": [leg...] }]
+Output shapes:
 
-IMPORTANT (fast-flights behavior, verified): `flight.flights` contains ONLY the
-OUTBOUND legs. For a round-trip, `price` is the TOTAL round-trip fare, but no
-return-leg detail is present in the parsed data. So the output describes the
-outbound itinerary; set `is_round_trip` when return was requested so the caller
-knows `price` is the two-way total.
+  one-way   -> { currency, trip: "one-way", route, flights: [flight...] }
+  round-trip-> { currency, trip: "round-trip", outbound_route, return_route,
+                 outbound: [flight...], return: [flight...] }
+
+Each flight: { "price": int, "currency": str, "is_round_trip": bool,
+                "airlines": [..], "type": str,
+                "carbon": {"typical_on_route": int, "emission": int},
+                "stops": int, "legs": [leg...] }
+
+ROUND-TRIP LEGS (fast-flights behavior, verified): a single round-trip query
+returns ONLY the outbound legs and a combined two-way price — the return
+direction is not in the data. To show BOTH inbound and outbound legs, the
+runner runs two separate one-way searches (outbound src->dst, return dst->src)
+and returns each direction under `outbound` and `return`, each with its own
+price and full legs. It does NOT manufacture a pairing between them, since the
+API exposes no booking token linking a specific outbound with a specific return.
 
 Each leg: { "from": code, "from_name": str, "to": code, "to_name": str,
             "from_city": str, "to_city": str,
@@ -90,6 +98,78 @@ def _leg(seg) -> dict:
     }
 
 
+def _query_params(q: dict) -> dict:
+    """Common fast-flights params shared by both trip directions."""
+    return dict(
+        seat=q.get("seat", "economy"),
+        passengers=Passengers(
+            adults=int(q.get("adults", 1)),
+            children=int(q.get("children", 0)),
+            infants_in_seat=int(q.get("infants_in_seat", 0)),
+            infants_on_lap=int(q.get("infants_on_lap", 0)),
+        ),
+        currency=q.get("currency", ""),
+        language=q.get("language", ""),
+        max_stops=q.get("max_stops"),
+        max_price=q.get("max_price"),
+        carry_on_bags=int(q.get("carry_on_bags", 0)),
+        checked_bags=int(q.get("checked_bags", 0)),
+        hide_separate_and_self_transfer=bool(q.get("hide_separate_and_self_transfer", False)),
+        exclude_basic_economy=bool(q.get("exclude_basic_economy", False)),
+    )
+
+
+def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
+    """Run a single one-way search src->dst on date and return the flight list.
+
+    One query per direction is used (instead of one round-trip query) because
+    fast-flights returns ONLY outbound legs for a round-trip and you cannot see
+    the return direction. Splitting into two one-way searches lets us present
+    real inbound legs for round-trips.
+    """
+    query = create_query(
+        flights=[FlightQuery(date=date, from_airport=src, to_airport=dst)],
+        trip="one-way",
+        **_query_params(q),
+    )
+    try:
+        result = get_flights(query)
+    except FlightsNotFound:
+        return []
+    currency = q.get("currency", "") or "default"
+    return [
+        {
+            "price": f.price,
+            "currency": currency,
+            "is_round_trip": False,
+            "airlines": f.airlines,
+            "type": f.type,
+            "carbon": {
+                "typical_on_route": f.carbon.typical_on_route,
+                "emission": f.carbon.emission,
+            },
+            "stops": len(f.flights) - 1,
+            "legs": [_leg(x) for x in f.flights],
+        }
+        for f in result
+    ]
+
+
+def _route(src: str, dst: str) -> dict:
+    """Resolved endpoint metadata + a ready-to-read summary."""
+    route = {
+        "from": airport_lookup.resolve(src),
+        "to": airport_lookup.resolve(dst),
+    }
+    route["summary"] = (
+        f"{route['from']['code']} {route['from']['city']}, "
+        f"{route['from']['country_name'] or route['from']['country']} -> "
+        f"{route['to']['code']} {route['to']['city']}, "
+        f"{route['to']['country_name'] or route['to']['country']}"
+    )
+    return route
+
+
 def run(q: dict) -> dict:
     seat = q.get("seat", "economy")
     trip = q.get("trip", "one-way")
@@ -110,73 +190,30 @@ def run(q: dict) -> dict:
                 f"(resolve it to a valid IATA code first)"
             )
 
-    legs = [FlightQuery(date=outbound_date, from_airport=src, to_airport=dst)]
-    return_date = q.get("return_date")
+    currency = q.get("currency", "") or "default"
+
     if trip == "round-trip":
+        return_date = q.get("return_date")
         if not return_date:
             raise ValueError("return_date is required for round-trip")
-        legs.append(FlightQuery(date=return_date, from_airport=dst, to_airport=src))
-
-    # Resolved endpoint metadata (disambiguation): which city & country each
-    # airport code belongs to. This is known before any network call.
-    route = {
-        "from": airport_lookup.resolve(src),
-        "to": airport_lookup.resolve(dst),
-    }
-    route["summary"] = (
-        f"{route['from']['code']} {route['from']['city']}, "
-        f"{route['from']['country_name'] or route['from']['country']} -> "
-        f"{route['to']['code']} {route['to']['city']}, "
-        f"{route['to']['country_name'] or route['to']['country']}"
-    )
-
-    query = create_query(
-        flights=legs,
-        trip=trip,
-        seat=seat,
-        passengers=Passengers(
-            adults=int(q.get("adults", 1)),
-            children=int(q.get("children", 0)),
-            infants_in_seat=int(q.get("infants_in_seat", 0)),
-            infants_on_lap=int(q.get("infants_on_lap", 0)),
-        ),
-        currency=q.get("currency", ""),
-        language=q.get("language", ""),
-        max_stops=q.get("max_stops"),
-        max_price=q.get("max_price"),
-        carry_on_bags=int(q.get("carry_on_bags", 0)),
-        checked_bags=int(q.get("checked_bags", 0)),
-        hide_separate_and_self_transfer=bool(q.get("hide_separate_and_self_transfer", False)),
-        exclude_basic_economy=bool(q.get("exclude_basic_economy", False)),
-    )
-
-    try:
-        result = get_flights(query)
-    except FlightsNotFound:
-        return {
-            "currency": q.get("currency", "") or "default",
-            "route": route,
-            "flights": [],
-        }
-
-    currency = q.get("currency", "") or "default"
-    out = [
-        {
-            "price": f.price,
+        # Two directional searches so BOTH inbound and outbound legs are shown.
+        payload = {
             "currency": currency,
-            "is_round_trip": trip == "round-trip",
-            "airlines": f.airlines,
-            "type": f.type,
-            "carbon": {
-                "typical_on_route": f.carbon.typical_on_route,
-                "emission": f.carbon.emission,
-            },
-            "stops": len(f.flights) - 1,
-            "legs": [_leg(x) for x in f.flights],
+            "trip": "round-trip",
+            "outbound_route": _route(src, dst),
+            "return_route": _route(dst, src),
+            "outbound": _search_direction(outbound_date, src, dst, q),
+            "return": _search_direction(return_date, dst, src, q),
         }
-        for f in result
-    ]
-    return {"currency": currency, "route": route, "flights": out}
+        return payload
+
+    # one-way: keep the flat, backward-compatible shape.
+    return {
+        "currency": currency,
+        "trip": "one-way",
+        "route": _route(src, dst),
+        "flights": _search_direction(outbound_date, src, dst, q),
+    }
 
 
 def main() -> int:

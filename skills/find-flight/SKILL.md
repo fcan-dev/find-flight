@@ -143,7 +143,9 @@ for flight in result:
 
 **Currency is NOT attached to prices.** `flight.price` is a bare `int` with no currency symbol or code. The currency that the price is quoted in is whatever you passed to `create_query(currency=...)` (or Google's default if you passed `""` — often the local currency, e.g. Turkish Lira for a Turkey-originating route). When presenting prices, surface the currency explicitly: track the `currency` you passed (or the user's expected currency) and label every price with it. Never hardcode a currency symbol in your output format — it may not match the price's actual currency.
 
-**Round-trip: `price` is the total, but only OUTBOUND legs are returned (verified).** For a `round-trip` query, `flight.flights` contains **only the outbound legs** — the parsed data does not include return-leg detail. `flight.price` is the **two-way total fare**. So: count stops and display legs from `flight.flights` as the outbound itinerary, and tell the user that `price` covers both directions but only outbound flight times are available. Do NOT invent or assume return-leg segments that aren't in the data.
+**Round-trip legs — raw `fast-flights` gives only OUTBOUND (verified).** A single `create_query(..., trip="round-trip")` returns `flight.flights` with **only the outbound legs** — no return-leg detail — and `flight.price` as the **two-way total fare**. So on raw fast-flights, count stops/display legs as the outbound itinerary; do NOT invent return segments that aren't in the data.
+
+**Round-trip legs — the bundled tools show BOTH directions.** `search_flights` / `flight_runner.py` do not use the raw round-trip query. Instead they run **two separate one-way searches** (outbound `src->dst`, return `dst->src`) and return them as `outbound` and `return` arrays, each with its **own price and full legs**. Each direction gets its own `outbound_route` / `return_route` metadata. They do NOT manufacture a pairing between a specific outbound and a specific return, because the API exposes no booking token linking them.
 
 `FlightsNotFound` is raised when nothing matches (or Google returns an error status).
 
@@ -201,11 +203,11 @@ best = result[0]                         # or result[:3] for top-N
 | Assuming 24h timestamps | Times are `(hour, minute)` on a 0–23 clock |
 | Guessing what a 3-letter airport code means | Verify it against the upstream `enums/airports.csv` (or a known route) before searching; the bundled `search_flights` tool resolves codes to city + country for you |
 | Hardcoding a currency symbol in output | `price` has no currency — track/pass `currency` and label prices with it |
-| Assuming return legs are in the round-trip data | `flights` holds only outbound legs; `price` is the two-way total — label it as such |
+| Assuming return legs are in raw round-trip data | Raw `fast-flights` returns only outbound legs; but the bundled `search_flights` tool runs two directional searches and returns `outbound` + `return`, so both legs ARE shown there |
 
 ## Real-world notes
 
 - Version: `fast-flights` 3.x. See upstream repo `AWeirdDev/flights` and docs `aweirddev.github.io/flights`.
 - Run a ready-made CLI: `python examples/search_flights.py --from TPE --to MYJ --date 2025-01-01 --seat economy`.
-- **Round-trip data (verified):** the parsed result contains only outbound legs; `price` is the two-way total. Present it as such.
+- **Round-trip legs (verified):** the bundled `search_flights` tool runs two one-way searches (outbound + return) and returns both directions with full legs, each with its own price. Raw `fast-flights` still returns only outbound legs for a single round-trip query.
 - **pi extension:** if the `search_flights` custom tool is active (via `extensions/flight-search.ts`), prefer calling it over writing ad-hoc Python — it returns structured, correctly-labelled results and leaves no scratch files. `flight_runner.py` is the equivalent standalone executor.
