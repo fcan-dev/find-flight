@@ -105,6 +105,8 @@ query = create_query(
 )
 ```
 
+`flight.price` on the result is the **true two-way total fare**; `flight.flights` contains only the **outbound** legs (no return segments are in the data).
+
 ## Natural-language path (agent-friendly)
 
 `get_flights` also accepts a plain sentence instead of a `Query`:
@@ -145,7 +147,7 @@ for flight in result:
 
 **Round-trip legs — raw `fast-flights` gives only OUTBOUND (verified).** A single `create_query(..., trip="round-trip")` returns `flight.flights` with **only the outbound legs** — no return-leg detail — and `flight.price` as the **two-way total fare**. So on raw fast-flights, count stops/display legs as the outbound itinerary; do NOT invent return segments that aren't in the data.
 
-**Round-trip legs — the bundled tools show BOTH directions.** `search_flights` / `flight_runner.py` do not use the raw round-trip query. Instead they run **two separate one-way searches** (outbound `src->dst`, return `dst->src`) and return them as `outbound` and `return` arrays, each with its **own price and full legs**. Each direction gets its own `outbound_route` / `return_route` metadata. They do NOT manufacture a pairing between a specific outbound and a specific return, because the API exposes no booking token linking them.
+**Round-trip legs — the bundled tools price the true RT fare.** `search_flights` / `flight_runner.py` run the **native round-trip query** (both legs in one `create_query`) as the price source: `round_trip[].price` is the **true two-way total** and its `legs` cover the **outbound direction only**. They additionally run **one one-way search for the return direction** (`return_options[]`) so real return-leg schedules are visible; those prices are **one-way reference fares, NOT round-trip prices** (a `price_type` field marks each entry: `round-trip-total` vs `one-way`). Each direction gets its own `outbound_route` / `return_route` metadata. No pairing is manufactured between a specific outbound and a specific return, because the API exposes no booking token linking them.
 
 `FlightsNotFound` is raised when nothing matches (or Google returns an error status).
 
@@ -203,11 +205,12 @@ best = result[0]                         # or result[:3] for top-N
 | Assuming 24h timestamps | Times are `(hour, minute)` on a 0–23 clock |
 | Guessing what a 3-letter airport code means | Verify it against the upstream `enums/airports.csv` (or a known route) before searching; the bundled `search_flights` tool resolves codes to city + country for you |
 | Hardcoding a currency symbol in output | `price` has no currency — track/pass `currency` and label prices with it |
-| Assuming return legs are in raw round-trip data | Raw `fast-flights` returns only outbound legs; but the bundled `search_flights` tool runs two directional searches and returns `outbound` + `return`, so both legs ARE shown there |
+| Summing two one-way fares to quote a round-trip price | One-way fares (esp. business) are often far higher than half the RT fare (verified: IST↔BRU direct business 2026-11-20/22 = USD 855 RT vs ~USD 1,422 summed one-ways). Always use the native round-trip query / `round_trip[].price` |
+| Assuming return legs are in raw round-trip data | Raw `fast-flights` returns only outbound legs (but with the true two-way price); the bundled `search_flights` tool adds a one-way return-direction search (`return_options[]`) so return-leg schedules ARE shown there |
 
 ## Real-world notes
 
 - Version: `fast-flights` 3.x. See upstream repo `AWeirdDev/flights` and docs `aweirddev.github.io/flights`.
 - Run a ready-made CLI: `python examples/search_flights.py --from TPE --to MYJ --date 2025-01-01 --seat economy`.
-- **Round-trip legs (verified):** the bundled `search_flights` tool runs two one-way searches (outbound + return) and returns both directions with full legs, each with its own price. Raw `fast-flights` still returns only outbound legs for a single round-trip query.
+- **Round-trip pricing (verified 2026-09-11):** a single native `create_query(trip="round-trip")` returns the **true two-way total** in `flight.price` with **outbound legs only**. The bundled `search_flights` / `flight_runner.py` use that native query as the price source (`round_trip[]`) plus a one-way return-direction search for leg schedules (`return_options[]`, one-way reference fares). Never estimate RT prices by summing one-ways.
 - **pi extension:** if the `search_flights` custom tool is active (via `extensions/flight-search.ts`), prefer calling it over writing ad-hoc Python — it returns structured, correctly-labelled results and leaves no scratch files. `flight_runner.py` is the equivalent standalone executor.

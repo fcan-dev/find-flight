@@ -25,20 +25,29 @@ Output shapes:
 
   one-way   -> { currency, trip: "one-way", route, flights: [flight...] }
   round-trip-> { currency, trip: "round-trip", outbound_route, return_route,
-                 outbound: [flight...], return: [flight...] }
+                 round_trip: [flight...], return_options: [flight...], note }
 
-Each flight: { "price": int, "currency": str, "is_round_trip": bool,
+Each flight: { "price": int, "currency": str, "price_type": str,
                 "airlines": [..], "type": str,
                 "carbon": {"typical_on_route": int, "emission": int},
                 "stops": int, "legs": [leg...] }
 
-ROUND-TRIP LEGS (fast-flights behavior, verified): a single round-trip query
-returns ONLY the outbound legs and a combined two-way price — the return
-direction is not in the data. To show BOTH inbound and outbound legs, the
-runner runs two separate one-way searches (outbound src->dst, return dst->src)
-and returns each direction under `outbound` and `return`, each with its own
-price and full legs. It does NOT manufacture a pairing between them, since the
-API exposes no booking token linking a specific outbound with a specific return.
+ROUND-TRIP PRICING (fast-flights behavior, verified 2026-09-11): a single
+native round-trip query (two FlightQuery legs, trip="round-trip") returns
+flight.price as the TRUE two-way total fare, and flight.flights with ONLY the
+outbound legs — the return direction is not in the data (no booking token
+links a specific outbound with a specific return). NEVER estimate a
+round-trip price by summing two one-way fares: one-way fares (especially
+business) are often far higher than half the RT fare (e.g. IST<->BRU direct
+business 2026-11-20/22 was USD 855 RT vs ~USD 1422 as a sum of one-ways).
+
+So for round-trips the runner:
+  1. runs the native RT query -> `round_trip[]`: true two-way totals with
+     outbound legs (price_type "round-trip-total") — this is the price to
+     present;
+  2. runs ONE one-way search for the return direction -> `return_options[]`:
+     real return-leg schedules priced at one-way fares for reference ONLY
+     (price_type "one-way-reference").
 
 Each leg: { "from": code, "from_name": str, "to": code, "to_name": str,
             "from_city": str, "to_city": str,
@@ -122,10 +131,9 @@ def _query_params(q: dict) -> dict:
 def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
     """Run a single one-way search src->dst on date and return the flight list.
 
-    One query per direction is used (instead of one round-trip query) because
-    fast-flights returns ONLY outbound legs for a round-trip and you cannot see
-    the return direction. Splitting into two one-way searches lets us present
-    real inbound legs for round-trips.
+    One-way fares. Used for trip="one-way", and (for round-trips) as a
+    reference search for the RETURN direction's leg schedules — the native RT
+    query does not include return legs.
     """
     query = create_query(
         flights=[FlightQuery(date=date, from_airport=src, to_airport=dst)],
@@ -141,7 +149,7 @@ def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
         {
             "price": f.price,
             "currency": currency,
-            "is_round_trip": False,
+            "price_type": "one-way",
             "airlines": f.airlines,
             "type": f.type,
             "carbon": {
@@ -150,6 +158,44 @@ def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
             },
             "stops": len(f.flights) - 1,
             "legs": [_leg(x) for x in f.flights],
+        }
+        for f in result
+    ]
+
+
+def _search_round_trip(out_date: str, ret_date: str, src: str, dst: str, q: dict) -> list:
+    """Native fast-flights round-trip query (both legs in ONE query).
+
+    Returns flights whose `price` is the TRUE two-way round-trip total fare.
+    `legs` contain only the OUTBOUND direction (fast-flights limitation,
+    verified) — return-leg schedules must come from a separate one-way search.
+    """
+    query = create_query(
+        flights=[
+            FlightQuery(date=out_date, from_airport=src, to_airport=dst),
+            FlightQuery(date=ret_date, from_airport=dst, to_airport=src),
+        ],
+        trip="round-trip",
+        **_query_params(q),
+    )
+    try:
+        result = get_flights(query)
+    except FlightsNotFound:
+        return []
+    currency = q.get("currency", "") or "default"
+    return [
+        {
+            "price": f.price,  # true two-way round-trip total
+            "price_type": "round-trip-total",
+            "currency": currency,
+            "airlines": f.airlines,
+            "type": f.type,
+            "carbon": {
+                "typical_on_route": f.carbon.typical_on_route,
+                "emission": f.carbon.emission,
+            },
+            "stops": len(f.flights) - 1,
+            "legs": [_leg(x) for x in f.flights],  # outbound legs only
         }
         for f in result
     ]
@@ -196,14 +242,22 @@ def run(q: dict) -> dict:
         return_date = q.get("return_date")
         if not return_date:
             raise ValueError("return_date is required for round-trip")
-        # Two directional searches so BOTH inbound and outbound legs are shown.
+        # Native RT query for the TRUE two-way price (+outbound legs), plus a
+        # one-way reference search so return-leg schedules are still visible.
         payload = {
             "currency": currency,
             "trip": "round-trip",
             "outbound_route": _route(src, dst),
             "return_route": _route(dst, src),
-            "outbound": _search_direction(outbound_date, src, dst, q),
-            "return": _search_direction(return_date, dst, src, q),
+            "round_trip": _search_round_trip(outbound_date, return_date, src, dst, q),
+            "return_options": _search_direction(return_date, dst, src, q),
+            "note": (
+                "round_trip[].price is the true two-way round-trip total from a "
+                "native fast-flights RT query; its legs cover the outbound "
+                "direction only. return_options[] are one-way fares for the "
+                "return direction (schedule reference, NOT round-trip prices). "
+                "Do not add one-way fares to estimate round-trip prices."
+            ),
         }
         return payload
 

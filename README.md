@@ -99,7 +99,7 @@ find-flight/
 ## ⚙️ Notes / limitations
 
 - **Airport & country resolution:** every endpoint code is resolved (name/city/ISO-3166 country) from the bundled lookup before searching; unknown codes error out. `airports.py`+`airports.json`/`countries.json` are regenerated from the upstream list (`AWeirdDev/flights` `enums/airports.csv`).
-- **Round-trip legs (verified):** raw `fast-flights` returns only **outbound** legs for a single round-trip query. This package runs **two directional one-way searches** (outbound + return) and returns both directions with full legs, each with its own price and resolved country/city metadata.
+- **Round-trip pricing (verified 2026-09-11):** a single native round-trip query returns the **true two-way total fare** with **outbound legs only**. This package uses that native query as the price source (`round_trip[]`) and adds **one one-way return-direction search** (`return_options[]`) so return-leg schedules are visible at one-way reference fares. Never estimate RT prices by summing two one-way fares.
 - `multi-city` trips are not supported by the upstream library.
 - Scraping Google is subject to rate limits / IP blocks. For heavy use, plug a proxy (BrightData) or richer source (SearchApi) integration into `fast-flights`.
 - Prices are quoted in the `currency` you pass; if omitted, Google picks a default (often the local currency).

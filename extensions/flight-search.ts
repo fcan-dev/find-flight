@@ -88,7 +88,7 @@ const search_flights = {
 	name: "search_flights",
 	label: "Search Flights",
 	description:
-		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips it runs two directional searches and returns BOTH the outbound and return legs (each with its own price and route). Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
+		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips it runs a native round-trip query and returns the TRUE two-way total price with the outbound legs, plus one-way reference fares showing return-leg schedules (return_options). Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
 	promptSnippet: "Search live Google Flights for price/availability between airports",
 	promptGuidelines: [
 		"Use search_flights for real flight prices and availability instead of guessing or writing ad-hoc scraping scripts.",
@@ -180,17 +180,17 @@ const search_flights = {
 			return `${header}\n${lines.join("\n")}\n\n${sorted.length} itinerary/ies (showing cheapest ${top.length})`;
 		};
 
-		// ---- round-trip: two directional searches, both legs shown ----
+		// ---- round-trip: native RT query (true two-way price) + return reference ----
 		if (obj.trip === "round-trip") {
-			const outbound = (obj.outbound ?? []) as Array<Record<string, unknown>>;
-			const ret = (obj.return ?? []) as Array<Record<string, unknown>>;
+			const rt = (obj.round_trip ?? []) as Array<Record<string, unknown>>;
+			const retOpts = (obj.return_options ?? []) as Array<Record<string, unknown>>;
 			const or = obj.outbound_route as Record<string, unknown> | undefined;
 			const rr = obj.return_route as Record<string, unknown> | undefined;
 			const outboundSummary = (or?.summary as string | undefined) ?? "";
 			const returnSummary = (rr?.summary as string | undefined) ?? "";
 			const parts: string[] = [];
-			parts.push(renderDirection("Outbound", outbound, outboundSummary));
-			parts.push(renderDirection("Return", ret, returnSummary));
+			parts.push(renderDirection("Round-trip (true two-way total, outbound legs shown)", rt, outboundSummary));
+			parts.push(renderDirection("Return leg options (one-way reference fares — NOT round-trip prices)", retOpts, returnSummary));
 			const text = parts.join("\n\n");
 			return {
 				content: [{ type: "text", text }],
@@ -199,8 +199,9 @@ const search_flights = {
 					trip: "round-trip",
 					outbound_route: or,
 					return_route: rr,
-					outbound,
-					return: ret,
+					round_trip: rt,
+					return_options: retOpts,
+					note: obj.note,
 				},
 			};
 		}
