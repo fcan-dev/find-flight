@@ -1,6 +1,6 @@
 {
   "name": "find-flight",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Google Flights search for agents — a pi extension (search_flights tool) + portable skill, powered by the fast-flights scraper.",
   "keywords": [
     "pi-package",
