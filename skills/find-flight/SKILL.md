@@ -14,6 +14,9 @@ description: Use when searching for flights, checking flight availability or pri
 ```bash
 pip install fast-flights
 # deps pulled automatically: primp, protobuf>=5.27, selectolax  (Python >= 3.10)
+# gotcha: 3.1.0 imports `typing_extensions` but does NOT declare it as a dependency —
+# if `import fast_flights` fails with ModuleNotFoundError: No module named 'typing_extensions',
+# install it:  pip install typing_extensions
 ```
 
 ## When to Use
@@ -210,7 +213,7 @@ best = result[0]                         # or result[:3] for top-N
 
 ## Real-world notes
 
-- Version: `fast-flights` 3.x. See upstream repo `AWeirdDev/flights` and docs `aweirddev.github.io/flights`.
+- Version: `fast-flights` 3.1.0 (latest stable, as of 2026-10-12). See upstream repo `AWeirdDev/flights` and docs `aweirddev.github.io/flights`.
 - Run a ready-made CLI: `python examples/search_flights.py --from TPE --to MYJ --date 2025-01-01 --seat economy`.
 - **Round-trip pricing (verified 2026-09-11):** a single native `create_query(trip="round-trip")` returns the **true two-way total** in `flight.price` with **outbound legs only**. The bundled `search_flights` / `flight_runner.py` use that native query as the price source (`round_trip[]`) plus a one-way return-direction search for leg schedules (`return_options[]`, one-way reference fares). Never estimate RT prices by summing one-ways.
 - **pi extension:** if the `search_flights` custom tool is active (via `extensions/flight-search.ts`), prefer calling it over writing ad-hoc Python — it returns structured, correctly-labelled results and leaves no scratch files. `flight_runner.py` is the equivalent standalone executor.
