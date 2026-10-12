@@ -14,12 +14,23 @@ Query keys (all optional unless noted):
   adults, children, infants_in_seat, infants_on_lap: int
   currency: ISO code or "" (Google default)
   language: IETF tag or ""
-  max_stops, max_price: int
+  max_stops, max_price: int   (max_stops=0 = nonstop only; applied
+     client-side because fast-flights 3.1.0 cannot parse nonstop-filtered pages)
   carry_on_bags, checked_bags, hide_separate_and_self_transfer,
   exclude_basic_economy: int/bool
 
+Currency: explicit `currency` wins; otherwise the FLIGHT_CURRENCY env var
+(default "USD"); FLIGHT_CURRENCY="" means "let Google decide" and the output
+is labelled "google-default". Prices are never left without a label.
+
 Errors are reported as JSON with {"error": "..."} and a non-zero exit code, so
 the caller can distinguish "no flights" (valid empty result) from a failure.
+The pi extension surfaces this as "flight search failed: <error>".
+
+Hardening: fast-flights 3.1.0's parser crashes on two real-world payload
+shapes — price-less "price on request" segments, and pages without a results
+array. This runner installs a tolerant parser (below) that skips the former
+and reports the latter as an error instead of a crash.
 
 Output shapes:
 
@@ -63,6 +74,7 @@ knows exactly which city and country each code refers to (disambiguation).
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from fast_flights import (
@@ -72,8 +84,167 @@ from fast_flights import (
     create_query,
     get_flights,
 )
+from fast_flights.parser import (
+    Airline,
+    Airport,
+    Alliance,
+    CarbonEmission,
+    Flights,
+    JsMetadata,
+    ResultList,
+    SimpleDatetime,
+    SingleFlight,
+    _parse_time,
+)
+from selectolax.lexbor import LexborHTMLParser
 
 import airports as airport_lookup
+
+
+class UnparsedPageError(RuntimeError):
+    """Google returned a page shape fast-flights 3.1.0 cannot parse.
+
+    This is NOT "no results" — it must surface as an error, never as an
+    empty result list.
+    """
+
+
+def _parse_js_tolerant(js: str) -> ResultList:
+    """Tolerant copy of fast_flights.parser.parse_js (pinned to 3.1.0 layout).
+
+    Upstream crashes on two real-world payload shapes:
+
+    A) segments whose price array is empty, k[1] == [[], <booking token>] —
+       "price on request" fares (seen: Eastar Jet on ICN->KIX, 2027-01-17).
+       -> skipped: a fare with no price is not a bookable option here.
+    B) payload[3] is None — pages without a results array (seen with
+       nonstop-filtered queries). -> raised as UnparsedPageError, because
+       it must never be reported as an empty result set.
+
+    A script without a 'data:' payload is also UnparsedPageError, not
+    IndexError.
+    """
+    if "data:" not in js:
+        raise UnparsedPageError(
+            "Google page script contains no 'data:' payload (page shape "
+            "not supported by fast-flights 3.1.0)"
+        )
+    data = js.split("data:", 1)[1].rsplit(",", 1)[0]
+
+    if data.endswith("errorHasStatus: true"):
+        raise FlightsNotFound("no flights found; received error")
+
+    payload = json.loads(data)
+
+    alliances = []
+    airlines = []
+
+    (alliances_data, airlines_data) = (
+        payload[7][1][0],
+        payload[7][1][1],
+    )
+
+    for code, name in alliances_data:
+        alliances.append(Alliance(code=code, name=name))
+
+    for code, name in airlines_data:
+        airlines.append(Airline(code=code, name=name))
+
+    meta = JsMetadata(alliances=alliances, airlines=airlines)
+
+    flights = ResultList()
+    if payload[3] is None:
+        raise UnparsedPageError(
+            "Google returned a page without a results array (payload[3] is "
+            "None); fast-flights 3.1.0 cannot parse this page shape (seen "
+            "with nonstop-filtered queries). No results available."
+        )
+    if payload[3][0] is None:
+        flights.metadata = meta
+        return flights
+
+    for k in payload[3][0]:
+        flight = k[0]
+        try:
+            price = k[1][0][1]
+        except (IndexError, TypeError):
+            continue  # shape A: price-less ("price on request") segment
+
+        typ = flight[0]
+        airlines = flight[1]
+
+        sg_flights = []
+
+        for single_flight in flight[2]:
+            from_airport = Airport(code=single_flight[3], name=single_flight[4])
+            to_airport = Airport(code=single_flight[6], name=single_flight[5])
+            departure_time = _parse_time(single_flight[8])
+            departure_date = tuple(single_flight[20])
+            departure = SimpleDatetime(date=departure_date, time=departure_time)
+
+            arrival_time = _parse_time(single_flight[10])
+            arrival_date = tuple(single_flight[21])
+            arrival = SimpleDatetime(date=arrival_date, time=arrival_time)
+
+            plane_type = single_flight[17]
+
+            duration = single_flight[11]
+
+            sg_flights.append(
+                SingleFlight(
+                    from_airport=from_airport,
+                    to_airport=to_airport,
+                    departure=departure,
+                    arrival=arrival,
+                    duration=duration,
+                    plane_type=plane_type,
+                )
+            )
+
+        # some additional data
+        extras = flight[22]
+        carbon_emission = extras[7]
+        typical_carbon_emission = extras[8]
+
+        flights.append(
+            Flights(
+                type=typ,
+                price=price,
+                airlines=airlines,
+                flights=sg_flights,
+                carbon=CarbonEmission(
+                    typical_on_route=typical_carbon_emission, emission=carbon_emission
+                ),
+            )
+        )
+
+    flights.metadata = meta
+    return flights
+
+
+def _parse_tolerant(html: str) -> ResultList:
+    """HTML-level parse with a clear error for pages without flight data."""
+    parser = LexborHTMLParser(html)
+    script = parser.css_first(r"script.ds\:1")
+    if script is None:
+        raise UnparsedPageError(
+            "Google page contained no flight data script (script.ds:1 "
+            "missing) - possibly a consent or redirect page. Retry the query."
+        )
+    return _parse_js_tolerant(script.text())
+
+
+# Install the tolerant parser on every call path. get_flights() calls
+# fast_flights.fetcher.parse (bound at import time), which in turn calls
+# parse_js via the parser module's global — patch all three names so the
+# patch holds no matter which path a future fast-flights version takes.
+import fast_flights.fetcher as _ff_fetcher  # noqa: E402
+import fast_flights.parser as _ff_parser  # noqa: E402
+
+_ff_parser.parse_js = _parse_js_tolerant
+_ff_parser.parse = _parse_tolerant
+_ff_fetcher.parse = _parse_tolerant
+
 
 SEATS = ("economy", "premium-economy", "business", "first")
 TRIPS = ("one-way", "round-trip")
@@ -119,7 +290,10 @@ def _query_params(q: dict) -> dict:
         ),
         currency=q.get("currency", ""),
         language=q.get("language", ""),
-        max_stops=q.get("max_stops"),
+        # max_stops=0 means "nonstop only". fast-flights 3.1.0 cannot parse
+        # nonstop-filtered pages (payload[3] is None), so the filter is
+        # applied client-side after the search (_apply_direct_only).
+        max_stops=None if q.get("max_stops") == 0 else q.get("max_stops"),
         max_price=q.get("max_price"),
         carry_on_bags=int(q.get("carry_on_bags", 0)),
         checked_bags=int(q.get("checked_bags", 0)),
@@ -144,8 +318,8 @@ def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
         result = get_flights(query)
     except FlightsNotFound:
         return []
-    currency = q.get("currency", "") or "default"
-    return [
+    currency = q.get("currency") or "google-default"
+    flights = [
         {
             "price": f.price,
             "currency": currency,
@@ -161,6 +335,9 @@ def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
         }
         for f in result
     ]
+    if q.get("max_stops") == 0:
+        flights = _apply_direct_only(flights)
+    return flights
 
 
 def _search_round_trip(out_date: str, ret_date: str, src: str, dst: str, q: dict) -> list:
@@ -182,8 +359,8 @@ def _search_round_trip(out_date: str, ret_date: str, src: str, dst: str, q: dict
         result = get_flights(query)
     except FlightsNotFound:
         return []
-    currency = q.get("currency", "") or "default"
-    return [
+    currency = q.get("currency") or "google-default"
+    flights = [
         {
             "price": f.price,  # true two-way round-trip total
             "price_type": "round-trip-total",
@@ -199,6 +376,9 @@ def _search_round_trip(out_date: str, ret_date: str, src: str, dst: str, q: dict
         }
         for f in result
     ]
+    if q.get("max_stops") == 0:
+        flights = _apply_direct_only(flights)
+    return flights
 
 
 def _route(src: str, dst: str) -> dict:
@@ -214,6 +394,36 @@ def _route(src: str, dst: str) -> dict:
         f"{route['to']['country_name'] or route['to']['country']}"
     )
     return route
+
+
+def _apply_direct_only(flights: list) -> list:
+    """Keep nonstop itineraries (client-side max_stops=0 filter).
+
+    Google's top results include the direct options on short-haul routes, so
+    filtering the normal search is a good approximation of the nonstop
+    filter. (A note attached to the result tells the caller this is so.)
+    """
+    return [f for f in flights if f["stops"] == 0]
+
+
+def _resolve_currency(q: dict) -> tuple[str, str]:
+    """Return (value_for_google, label_for_output).
+
+    Explicit `currency` in the query wins (upper-cased). Otherwise the
+    FLIGHT_CURRENCY env var (default "USD"). An empty value means "let
+    Google decide"; the output is then labelled "google-default" so prices
+    are never shown without a label.
+    """
+    explicit = (q.get("currency") or "").strip().upper()
+    if explicit:
+        return explicit, explicit
+    env = os.environ.get("FLIGHT_CURRENCY")
+    if env is None:
+        env = "USD"
+    env = env.strip().upper()
+    if env:
+        return env, env
+    return "", "google-default"
 
 
 def run(q: dict) -> dict:
@@ -236,7 +446,8 @@ def run(q: dict) -> dict:
                 f"(resolve it to a valid IATA code first)"
             )
 
-    currency = q.get("currency", "") or "default"
+    effective_currency, currency = _resolve_currency(q)
+    q = {**q, "currency": effective_currency}
 
     if trip == "round-trip":
         return_date = q.get("return_date")
@@ -251,23 +462,35 @@ def run(q: dict) -> dict:
             "return_route": _route(dst, src),
             "round_trip": _search_round_trip(outbound_date, return_date, src, dst, q),
             "return_options": _search_direction(return_date, dst, src, q),
-            "note": (
-                "round_trip[].price is the true two-way round-trip total from a "
-                "native fast-flights RT query; its legs cover the outbound "
-                "direction only. return_options[] are one-way fares for the "
-                "return direction (schedule reference, NOT round-trip prices). "
-                "Do not add one-way fares to estimate round-trip prices."
-            ),
         }
+        note = (
+            "round_trip[].price is the true two-way round-trip total from a "
+            "native fast-flights RT query; its legs cover the outbound "
+            "direction only. return_options[] are one-way fares for the "
+            "return direction (schedule reference, NOT round-trip prices). "
+            "Do not add one-way fares to estimate round-trip prices."
+        )
+        if q.get("max_stops") == 0:
+            note += (
+                " max_stops=0: nonstop filter applied client-side to the top "
+                "itineraries Google returned."
+            )
+        payload["note"] = note
         return payload
 
     # one-way: keep the flat, backward-compatible shape.
-    return {
+    out = {
         "currency": currency,
         "trip": "one-way",
         "route": _route(src, dst),
         "flights": _search_direction(outbound_date, src, dst, q),
     }
+    if q.get("max_stops") == 0:
+        out["note"] = (
+            "max_stops=0: nonstop filter applied client-side to the top "
+            "itineraries Google returned."
+        )
+    return out
 
 
 def main() -> int:

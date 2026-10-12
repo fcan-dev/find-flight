@@ -93,6 +93,8 @@ find-flight/
 ├── countries.json             # ISO-3166 alpha-2 -> English country name
 ├── examples/
 │   └── search_flights.py      # CLI example
+├── tests/
+│   └── test_flight_runner.py  # unit tests, no network (python3 tests/test_flight_runner.py)
 └── README.md
 ```
 
@@ -102,7 +104,7 @@ find-flight/
 - **Round-trip pricing (verified 2026-09-11):** a single native round-trip query returns the **true two-way total fare** with **outbound legs only**. This package uses that native query as the price source (`round_trip[]`) and adds **one one-way return-direction search** (`return_options[]`) so return-leg schedules are visible at one-way reference fares. Never estimate RT prices by summing two one-way fares.
 - `multi-city` trips are not supported by the upstream library.
 - Scraping Google is subject to rate limits / IP blocks. For heavy use, plug a proxy (BrightData) or richer source (SearchApi) integration into `fast-flights`.
-- Prices are quoted in the `currency` you pass; if omitted, Google picks a default (often the local currency).
+- Prices are quoted in the `currency` you pass; if omitted, the runner defaults to `USD` (override: `FLIGHT_CURRENCY` env var; `''` = Google's own default). Prices always carry a usable label — never an unmarked `default`.
 - Config: point the runner elsewhere with `FLIGHT_RUNNER=/path/to/flight_runner.py`, or choose a different interpreter with `FLIGHT_PYTHON=...`.
 
 ## Security

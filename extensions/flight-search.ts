@@ -5,6 +5,15 @@
  * `fast-flights` Google Flights scraper) for deterministic, structured results:
  * correct per-direction stop counts, no scratch scripts, no ad-hoc formatting.
  *
+ * Output contract (see `description`): COMPACT JSON, at most 10 itineraries
+ * per section (cheapest first) with total_* full counts. The full untruncated
+ * result is kept in `details` for the transcript.
+ *
+ * Error contract: the runner reports failures as {"error": "..."} on stdout
+ * with a non-zero exit code. This extension surfaces that message as
+ * `flight search failed: <error>` so the agent sees the real cause in one
+ * call instead of re-running the runner by hand.
+ *
  * Install:
  *   - python3 with `fast-flights` installed (the runner reports a clear error if not)
  *   - symlink this file into your pi extensions dir so it auto-loads on /reload:
@@ -69,9 +78,21 @@ function runPython(runner: string, python: string, payload: unknown, signal?: Ab
 			},
 			(error, stdout, stderr) => {
 				if (error) {
+					// Runner contract: failures print {"error": "..."} to stdout
+					// and exit 1. Surface that real reason instead of the
+					// generic "Command failed" shell message.
+					let detail = "";
+					try {
+						const parsed = JSON.parse(stdout) as { error?: unknown };
+						if (parsed && typeof parsed.error === "string") detail = parsed.error;
+					} catch {
+						detail = `${stdout ?? ""} ${stderr ?? ""}`.trim().slice(0, 500);
+					}
 					reject(
 						new Error(
-							`flight search failed (${error.message})${stderr ? `: ${stderr.trim()}` : ""}`,
+							detail
+								? `flight search failed: ${detail}`
+								: `flight search failed (${error.message})`,
 						),
 					);
 					return;
@@ -84,16 +105,20 @@ function runPython(runner: string, python: string, payload: unknown, signal?: Ab
 	});
 }
 
+/** How many itineraries per section are returned in the tool output. */
+const LIMIT = 10;
+
 const search_flights = {
 	name: "search_flights",
 	label: "Search Flights",
 	description:
-		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you know exactly which city the code refers to before reading results. Returns structured JSON: the resolved route (airport/city/country), price (currency), airline(s), number of stops, and each flight leg with airports, city/country, times, duration and plane type. For round-trips it runs a native round-trip query and returns the TRUE two-way total price with the outbound legs, plus one-way reference fares showing return-leg schedules (return_options). Use for finding flights, checking prices/availability, comparing routes, dates, seats, or airlines.",
+		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to airport name, city and ISO-3166 country before searching. Returns COMPACT JSON (single line). one-way: {trip, currency, route, flights[], total_flights}. round-trip: {trip, currency, outbound_route, return_route, round_trip[], return_options[], total_round_trip, total_return_options, note}. Each array holds at most 10 itineraries, cheapest first; total_* give the full result count. Each itinerary: {price (in `currency`), price_type ('round-trip-total' or 'one-way'), airlines, stops, legs[]}; each leg: {from, to, from_city, to_city, from_country, to_country, date, departure 'HH:MM', arrival 'HH:MM', duration_minutes, plane}. Round-trip semantics: round_trip[].price is the TRUE two-way total and its legs cover the OUTBOUND direction only; return_options[] are ONE-WAY reference fares for the return direction (schedule reference) - never add them to the round-trip price. Failures raise an error 'flight search failed: <reason>' where <reason> is the runner's real error (e.g. an unparseable Google page) - report it to the user or retry once; do not re-implement the search ad hoc. Always pass an explicit currency; when omitted the runner defaults to USD (env FLIGHT_CURRENCY, '' = Google default). max_stops=0 = nonstop only, applied client-side to Google's top results.",
 	promptSnippet: "Search live Google Flights for price/availability between airports",
 	promptGuidelines: [
 		"Use search_flights for real flight prices and availability instead of guessing or writing ad-hoc scraping scripts.",
 		"Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you can confirm a code really means the city the user wants (e.g. ECN = Ercan/Cyprus). Resolve dates to YYYY-MM-DD; ask the user if the code, trip type, or dates are unclear.",
-		"search_flights prices carry the currency you pass; pass a currency (e.g. 'EUR', 'TRY', 'USD') unless the user prefers Google's default.",
+		"Always pass an explicit currency to search_flights (e.g. 'EUR', 'TRY', 'USD') so prices are labelled; the runner defaults to USD when omitted.",
+		"search_flights output is compact JSON: at most 10 itineraries per section (cheapest first), total_* = full counts. For round-trips, only round_trip[].price is the real two-way price; return_options[] are one-way reference fares — never sum them into the round-trip price.",
 	],
 	parameters: Type.Object({
 		from_airport: Type.String({ description: "3-letter IATA departure airport code (e.g. 'IST')" }),
@@ -105,14 +130,22 @@ const search_flights = {
 		),
 		seat: StringEnum(["economy", "premium-economy", "business", "first"] as const),
 		currency: Type.Optional(
-			Type.String({ description: "ISO currency code, e.g. EUR, USD, TRY. Omit for Google default." }),
+			Type.String({
+				description:
+					"ISO currency code, e.g. EUR, USD, TRY. Always pass one so prices are labelled; when omitted the runner defaults to USD (override: env FLIGHT_CURRENCY, '' = Google default).",
+			}),
 		),
 		language: Type.Optional(
 			Type.String({ description: "IETF language tag, e.g. en-US. Omit for Google default." }),
 		),
 		adults: Type.Optional(Type.Integer({ minimum: 0, maximum: 9 })),
 		children: Type.Optional(Type.Integer({ minimum: 0, maximum: 9 })),
-		max_stops: Type.Optional(Type.Integer({ minimum: 0 })),
+		max_stops: Type.Optional(
+			Type.Integer({
+				description:
+					"Max number of stops. 0 = nonstop only (applied client-side to Google's top results); omit for no limit.",
+			}),
+		),
 		max_price: Type.Optional(Type.Integer({ minimum: 0 })),
 		exclude_basic_economy: Type.Optional(Type.Boolean()),
 	}),
@@ -135,86 +168,45 @@ const search_flights = {
 			throw new Error(`flight search returned invalid JSON: ${stdout.slice(0, 300)}`);
 		}
 		const obj = data as Record<string, unknown>;
-		if (obj.error) throw new Error(`flight search error: ${obj.error}`);
+		if (obj.error) throw new Error(`flight search failed: ${obj.error}`);
 
-		const currency = (obj.currency as string | undefined) ?? "";
-
-		// Human-friendly duration: show minutes too when under 2h (e.g. 1h 35m).
-		const fmtDuration = (min: number) => {
-			const m = Math.round(min || 0);
-			const h = Math.floor(m / 60);
-			const r = m % 60;
-			return h > 0 ? `${h}h${r ? ` ${r}m` : ""}` : `${r}m`;
-		};
-
-		// Render one direction of flights (outbound or return).
-		const renderDirection = (
-			label: string,
-			flights: Array<Record<string, unknown>>,
-			routeSummary?: string,
-		) => {
-			const sorted = [...flights].sort((a, b) => Number(a.price) - Number(b.price));
-			const top = sorted.slice(0, 10);
-			const header = `## ${label}${routeSummary ? ` — ${routeSummary}` : ""}`;
-			if (top.length === 0) return `${header}\nNo ${label.toLowerCase()} flights found.`;
-			const lines = top.map((f, i) => {
-				const legs = (f.legs as Array<Record<string, string>>) ?? [];
-				const where = (l: Record<string, string>, prefix: "from" | "to") => {
-					const code = l[prefix];
-					const city = l[`${prefix}_city`] ?? "";
-					const country = l[`${prefix}_country`] ?? "";
-					const ctx = city || country ? ` (${city}, ${country})` : "";
-					return `${code}${ctx}`;
-				};
-				const seg = legs
-					.map(
-						(l) =>
-							`${where(l, "from")} ${l.departure} → ${where(l, "to")} ${l.arrival} ${l.date} ` +
-						`(${fmtDuration(Number(l.duration_minutes) || 0)}, ${l.plane})`,
-					)
-					.join(", ");
-				const airline = (f.airlines as string[] | undefined)?.join("/") ?? "";
-				const stops = Number(f.stops) || 0;
-				return `${i + 1}. ${f.currency ?? currency} ${f.price} · ${airline} · ${stops === 0 ? "direct" : `${stops} stop${stops > 1 ? "s" : ""}`}\n   ${seg}`;
-			});
-			return `${header}\n${lines.join("\n")}\n\n${sorted.length} itinerary/ies (showing cheapest ${top.length})`;
-		};
+		const byPrice = (list: Array<Record<string, unknown>>) =>
+			[...list].sort((a, b) => Number(a.price) - Number(b.price));
 
 		// ---- round-trip: native RT query (true two-way price) + return reference ----
 		if (obj.trip === "round-trip") {
-			const rt = (obj.round_trip ?? []) as Array<Record<string, unknown>>;
-			const retOpts = (obj.return_options ?? []) as Array<Record<string, unknown>>;
-			const or = obj.outbound_route as Record<string, unknown> | undefined;
-			const rr = obj.return_route as Record<string, unknown> | undefined;
-			const outboundSummary = (or?.summary as string | undefined) ?? "";
-			const returnSummary = (rr?.summary as string | undefined) ?? "";
-			const parts: string[] = [];
-			parts.push(renderDirection("Round-trip (true two-way total, outbound legs shown)", rt, outboundSummary));
-			parts.push(renderDirection("Return leg options (one-way reference fares — NOT round-trip prices)", retOpts, returnSummary));
-			const text = parts.join("\n\n");
+			const rtAll = byPrice((obj.round_trip ?? []) as Array<Record<string, unknown>>);
+			const retAll = byPrice((obj.return_options ?? []) as Array<Record<string, unknown>>);
+			const out = {
+				trip: "round-trip",
+				currency: (obj.currency as string | undefined) ?? "",
+				outbound_route: obj.outbound_route,
+				return_route: obj.return_route,
+				round_trip: rtAll.slice(0, LIMIT),
+				return_options: retAll.slice(0, LIMIT),
+				total_round_trip: rtAll.length,
+				total_return_options: retAll.length,
+				note: obj.note,
+			};
 			return {
-				content: [{ type: "text", text }],
-				details: {
-					currency,
-					trip: "round-trip",
-					outbound_route: or,
-					return_route: rr,
-					round_trip: rt,
-					return_options: retOpts,
-					note: obj.note,
-				},
+				content: [{ type: "text", text: JSON.stringify(out) }],
+				details: { ...out, round_trip: rtAll, return_options: retAll },
 			};
 		}
 
-		// ---- one-way (and legacy flat shape) ----
-		const route = obj.route as Record<string, unknown> | undefined;
-		const routeSummary = (route?.summary as string | undefined) ?? "";
-		const flights = (obj.flights ?? []) as Array<Record<string, unknown>>;
-		const rendered = renderDirection("Flights", flights, routeSummary);
-		const text = `${rendered}\n\nRoute: ${routeSummary}`;
+		// ---- one-way (flat shape) ----
+		const all = byPrice((obj.flights ?? []) as Array<Record<string, unknown>>);
+		const out: Record<string, unknown> = {
+			trip: "one-way",
+			currency: (obj.currency as string | undefined) ?? "",
+			route: obj.route,
+			flights: all.slice(0, LIMIT),
+			total_flights: all.length,
+		};
+		if (obj.note) out.note = obj.note;
 		return {
-			content: [{ type: "text", text }],
-			details: { currency, trip: "one-way", route, flights },
+			content: [{ type: "text", text: JSON.stringify(out) }],
+			details: { ...out, flights: all },
 		};
 	},
 };
