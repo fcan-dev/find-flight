@@ -1,6 +1,6 @@
 {
   "name": "find-flight",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Google Flights search for agents — a pi extension (search_flights tool) + portable skill, powered by the fast-flights scraper.",
   "keywords": [
     "pi-package",
@@ -33,8 +33,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "verify": "python3 -c \"import json,sys; from pathlib import Path; Path('flight_runner.py')\" && python3 -m py_compile flight_runner.py airports.py && python3 -c \"import airports; assert airports.is_known('IST') and airports.country_name('TR')=='Turkey'\" && echo \"runner OK\"",
-    "prepublishOnly": "npm run verify"
+    "verify": "python3 -c \"import json,sys; from pathlib import Path; Path('flight_runner.py')\" && python3 -c \"[compile(open(f, encoding='utf-8').read(), f, 'exec') for f in ['flight_runner.py', 'airports.py', 'examples/search_flights.py']]\" && python3 -c \"import airports; assert airports.is_known('IST') and airports.country_name('TR')=='Türkiye'\" && echo \"runner OK\"",
+    "prepublishOnly": "npm run verify && python3 tests/test_flight_runner.py",
+    "prepack": "find . \\( -name __pycache__ -type d -prune -exec rm -rf {} + \\) -o \\( -name '*.pyc' -delete \\) -o \\( -name .DS_Store -delete \\)"
   },
   "publishConfig": {
     "access": "public"
