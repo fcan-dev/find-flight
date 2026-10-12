@@ -14,6 +14,23 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date as Date
+from pathlib import Path
+
+# Install the tolerant fast-flights parser before any search: raw fast_flights
+# 3.1.0 crashes on price-less "price on request" segments (e.g. Eastar Jet on
+# ICN->KIX). flight_runner lives in the repo root, not next to this script.
+# Standalone copies (no repo root) keep working with the raw parser + a warning.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "flight_runner.py").is_file():
+    sys.path.insert(0, str(_REPO_ROOT))
+    try:
+        import flight_runner  # noqa: E402,F401  (import installs the parser patch)
+    except Exception as _e:  # noqa: BLE001
+        print(f"warning: tolerant parser unavailable ({_e!r}); "
+              "raw fast-flights may crash on some pages", file=sys.stderr)
+else:
+    print("note: standalone mode (no flight_runner.py found); using raw "
+          "fast-flights parser — some pages may crash", file=sys.stderr)
 
 from fast_flights import (
     FlightsNotFound,

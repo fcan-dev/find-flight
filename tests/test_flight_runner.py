@@ -222,6 +222,62 @@ def test_parser_patch_installed_on_all_paths():
     assert ff_fetcher.parse is flight_runner._parse_tolerant
 
 
+# ---------------------------------------------------------------------------
+# 4b. examples CLI uses the hardened parser
+# ---------------------------------------------------------------------------
+
+def test_examples_cli_installs_tolerant_parser():
+    # The documented CLI (examples/search_flights.py) must run with the same
+    # tolerant parser as flight_runner — raw fast_flights crashes on
+    # price-less "price on request" segments (seen: Eastar Jet ICN->KIX).
+    # Verified in a subprocess because the parser patch is a process-global
+    # import side effect this suite would already have installed.
+    import subprocess
+    repo = Path(__file__).resolve().parents[1]
+    probe = (
+        "import importlib.util, fast_flights.parser as p\n"
+        "spec = importlib.util.spec_from_file_location('sf_cli', %r)\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "if p.parse_js.__name__ != '_parse_js_tolerant':\n"
+        "    raise SystemExit('examples CLI left the raw fast_flights parser in place')\n"
+    ) % (str(repo / "examples" / "search_flights.py"),)
+    r = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(repo)
+    )
+    assert r.returncode == 0, (
+        f"examples CLI did not install the tolerant parser:\n{r.stdout}{r.stderr}"
+    )
+
+
+def test_examples_cli_standalone_copy_does_not_crash():
+    # The CLI is documented as a ready-made standalone script. A copy placed
+    # outside the repo (no flight_runner.py reachable) must import cleanly
+    # with a warning instead of dying with ImportError.
+    import subprocess
+    import tempfile
+    src = Path(__file__).resolve().parents[1] / "examples" / "search_flights.py"
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "search_flights.py"
+        dest.write_text(src.read_text())
+        probe = (
+            "import importlib.util\n"
+            "spec = importlib.util.spec_from_file_location('sf_cli', %r)\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(m)\n"
+        ) % (str(dest),)
+        # cwd MUST be the temp dir: with `python -c`, '' (the cwd) is on
+        # sys.path, and a repo cwd would let the import find flight_runner
+        # and make this test meaningless.
+        r = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, cwd=tmp
+        )
+    assert r.returncode == 0, (
+        f"standalone copy of the CLI crashed on import:\n{r.stdout}{r.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 5. Country metadata integrity (countries.json)
 # ---------------------------------------------------------------------------
 
