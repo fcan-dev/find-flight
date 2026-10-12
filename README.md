@@ -7,7 +7,7 @@
 
 Powered by the [`fast-flights`](https://github.com/AWeirdDev/flights) Google Flights scraper. Read-only — it fetches real availability and prices, but does **not** book anything.
 
-## ✨ What it does
+## What it does
 
 - Search flights between airports on given dates (one-way or round-trip)
 - Real prices, airlines, per-leg times, duration, plane type, stop counts, carbon emissions
@@ -16,7 +16,7 @@ Powered by the [`fast-flights`](https://github.com/AWeirdDev/flights) Google Fli
 - Rejects unknown airport codes with a clear error instead of silently querying the wrong city
 - Returns **structured** results — correct per-direction stop counts, no ad-hoc scripts left behind
 
-## 📦 Install
+## Install
 
 Requires **Python 3.10+** with fast-flights, and live network access:
 
@@ -53,7 +53,7 @@ ln -s "$(pwd)/skills/find-flight" ~/.agents/skills/find-flight
 ln -s "$(pwd)/skills/find-flight" ~/.claude/skills/find-flight
 ```
 
-## 🚀 Usage
+## Usage
 
 Just ask in natural language:
 
@@ -78,7 +78,7 @@ echo '{"from_airport":"IST","to_airport":"ECN","outbound_date":"2026-09-12","tri
 python examples/search_flights.py --from IST --to ECN --date 2026-09-12 --currency EUR --sort price --limit 3
 ```
 
-## 📁 Layout
+## Layout
 
 ```
 find-flight/
@@ -96,7 +96,7 @@ find-flight/
 └── README.md
 ```
 
-## ⚙️ Notes / limitations
+## Notes / limitations
 
 - **Airport & country resolution:** every endpoint code is resolved (name/city/ISO-3166 country) from the bundled lookup before searching; unknown codes error out. `airports.py`+`airports.json`/`countries.json` are regenerated from the upstream list (`AWeirdDev/flights` `enums/airports.csv`).
 - **Round-trip pricing (verified 2026-09-11):** a single native round-trip query returns the **true two-way total fare** with **outbound legs only**. This package uses that native query as the price source (`round_trip[]`) and adds **one one-way return-direction search** (`return_options[]`) so return-leg schedules are visible at one-way reference fares. Never estimate RT prices by summing two one-way fares.
@@ -105,7 +105,7 @@ find-flight/
 - Prices are quoted in the `currency` you pass; if omitted, Google picks a default (often the local currency).
 - Config: point the runner elsewhere with `FLIGHT_RUNNER=/path/to/flight_runner.py`, or choose a different interpreter with `FLIGHT_PYTHON=...`.
 
-## 🔒 Security
+## Security
 
 This package executes Python (`flight_runner.py`) that makes live network requests to Google. Review the source before installing.
 
