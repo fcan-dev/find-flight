@@ -140,6 +140,15 @@ const search_flights = {
 		),
 		adults: Type.Optional(Type.Integer({ minimum: 0, maximum: 9 })),
 		children: Type.Optional(Type.Integer({ minimum: 0, maximum: 9 })),
+		airlines: Type.Optional(
+			Type.Array(
+				Type.String({ description: "3-letter IATA airline code, e.g. 'DL', 'UA', 'WN'" }),
+				{
+					description:
+						"Restrict results to these airline(s). Pass one or more IATA carrier codes (e.g. ['DL','UA']); omit for no restriction.",
+				},
+			),
+		),
 		max_stops: Type.Optional(
 			Type.Integer({
 				description:

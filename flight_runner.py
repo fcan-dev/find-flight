@@ -310,7 +310,7 @@ def _search_direction(date: str, src: str, dst: str, q: dict) -> list:
     query does not include return legs.
     """
     query = create_query(
-        flights=[FlightQuery(date=date, from_airport=src, to_airport=dst)],
+        flights=[FlightQuery(date=date, from_airport=src, to_airport=dst, airlines=q.get("airlines"))],
         trip="one-way",
         **_query_params(q),
     )
@@ -349,8 +349,8 @@ def _search_round_trip(out_date: str, ret_date: str, src: str, dst: str, q: dict
     """
     query = create_query(
         flights=[
-            FlightQuery(date=out_date, from_airport=src, to_airport=dst),
-            FlightQuery(date=ret_date, from_airport=dst, to_airport=src),
+            FlightQuery(date=out_date, from_airport=src, to_airport=dst, airlines=q.get("airlines")),
+            FlightQuery(date=ret_date, from_airport=dst, to_airport=src, airlines=q.get("airlines")),
         ],
         trip="round-trip",
         **_query_params(q),
