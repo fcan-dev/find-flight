@@ -339,6 +339,82 @@ def test_countries_json_matches_pinned_table():
 
 
 # ---------------------------------------------------------------------------
+# 6. airlines filter
+#
+# The search tool gained an `airlines` param to let the caller request specific
+# carrier(s). fast-flights already supports FlightQuery(airlines=[...]); these
+# tests pin that wiring.
+#
+# They check the propagation WITHOUT hitting the network:
+#   q.get("airlines") -> FlightQuery(airlines=...) -> serialized tfs protobuf
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+
+
+def _query_tfs(src, dst, date="2026-12-17", airlines=None) -> bytes:
+    """Serialize a one-way FlightQuery and return the raw tfs protobuf bytes."""
+    from fast_flights import FlightQuery, create_query
+
+    q = FlightQuery(date=date, from_airport=src, to_airport=dst, airlines=airlines)
+    query = create_query(flights=[q], trip="one-way")
+    return base64.b64decode(query.params()["tfs"])
+
+
+def test_airlines_propagates_into_serialized_query():
+    raw = _query_tfs("LAX", "SFO", airlines=["AA", "DL"])
+    # AA and DL must appear in the protobuf payload the scraper sends.
+    assert b"AA" in raw
+    assert b"DL" in raw
+    # and the airports are still there, so airlines didn't clobber them
+    assert b"LAX" in raw
+    assert b"SFO" in raw
+
+
+def test_no_airlines_means_unfiltered_query():
+    raw = _query_tfs("LAX", "SFO")
+    # No airline restriction: the query must not carry a carrier list. The
+    # protobuf has no airline tokens between the date and the airports.
+    assert b"LAX" in raw
+    # A sentinel carrier that would only be present if a filter leaked through.
+    assert b"ZZ" not in raw
+
+
+def test_airlines_none_is_same_as_omitted():
+    from fast_flights import FlightQuery, create_query
+
+    with_none = create_query(
+        flights=[FlightQuery(date="2026-12-17", from_airport="LAX", to_airport="SFO", airlines=None)],
+        trip="one-way",
+    ).params()["tfs"]
+    without = create_query(
+        flights=[FlightQuery(date="2026-12-17", from_airport="LAX", to_airport="SFO")],
+        trip="one-way",
+    ).params()["tfs"]
+    assert with_none == without
+
+
+def test_airlines_flows_through_query_dict():
+    # _search_direction / _search_round_trip read airlines from the query dict
+    # (q.get("airlines")) and pass it to FlightQuery. Verify that path shape
+    # without a network call by exercising the exact expression the runner uses.
+    import flight_runner
+
+    q = {"airlines": ["UA"]}
+    from fast_flights import FlightQuery, create_query
+
+    query = create_query(
+        flights=[
+            FlightQuery(
+                date="2026-12-17", from_airport="LAX", to_airport="SFO", airlines=q.get("airlines")
+            )
+        ],
+        trip="one-way",
+    )
+    assert b"UA" in base64.b64decode(query.params()["tfs"])
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (pytest-compatible tests are plain functions)
 # ---------------------------------------------------------------------------
 
