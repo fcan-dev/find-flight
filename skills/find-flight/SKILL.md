@@ -178,6 +178,7 @@ best = result[0]                         # or result[:3] for top-N
 | `max_price`, `carry_on_bags`, `checked_bags`, `hide_separate_and_self_transfer`, `exclude_basic_economy` | create_query | search-wide |
 | Per-leg filters | FlightQuery | `max_stops`, `airlines`, departure/arrival hour windows, `max_duration_minutes`, `connecting_airports`, `min/max_layover_minutes`, `less_emissions_only` |
 | `max_stops` (tool / runner) | search_flights / flight_runner | int; `0` = nonstop only, applied **client-side** to Google's top results (fast-flights 3.1.0 cannot parse nonstop-filtered pages); other values pass through to Google |
+| `airlines` (tool / runner) | search_flights / flight_runner | array of 2-letter IATA carrier codes (e.g. `["UA","DL"]`); restricts results to those carriers. For round-trips Google applies the filter to the **whole** search (first leg's value wins) |
 
 ## Gotchas
 

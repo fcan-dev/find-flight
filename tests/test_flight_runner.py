@@ -371,13 +371,12 @@ def test_airlines_propagates_into_serialized_query():
     assert b"SFO" in raw
 
 
-def test_no_airlines_means_unfiltered_query():
-    raw = _query_tfs("LAX", "SFO")
-    # No airline restriction: the query must not carry a carrier list. The
-    # protobuf has no airline tokens between the date and the airports.
-    assert b"LAX" in raw
-    # A sentinel carrier that would only be present if a filter leaked through.
-    assert b"ZZ" not in raw
+def test_airlines_filter_changes_the_payload():
+    filtered = _query_tfs("LAX", "SFO", airlines=["UA"])
+    unfiltered = _query_tfs("LAX", "SFO")
+    # The filter must actually change what the scraper sends to Google.
+    assert filtered != unfiltered
+    assert b"UA" in filtered
 
 
 def test_airlines_none_is_same_as_omitted():
@@ -394,24 +393,30 @@ def test_airlines_none_is_same_as_omitted():
     assert with_none == without
 
 
-def test_airlines_flows_through_query_dict():
-    # _search_direction / _search_round_trip read airlines from the query dict
-    # (q.get("airlines")) and pass it to FlightQuery. Verify that path shape
-    # without a network call by exercising the exact expression the runner uses.
+def test_airlines_flows_through_runner_functions():
+    # Exercise the REAL runner code paths (not a re-typed copy of the
+    # expression): stub get_flights and capture the Query object the runner
+    # would send to the network, for both one-way and round-trip.
     import flight_runner
 
-    q = {"airlines": ["UA"]}
-    from fast_flights import FlightQuery, create_query
+    captured = {}
 
-    query = create_query(
-        flights=[
-            FlightQuery(
-                date="2026-12-17", from_airport="LAX", to_airport="SFO", airlines=q.get("airlines")
-            )
-        ],
-        trip="one-way",
-    )
-    assert b"UA" in base64.b64decode(query.params()["tfs"])
+    def _fake_get_flights(query, *args, **kwargs):
+        captured["query"] = query
+        return []  # empty result: the valid "no flights" path
+
+    orig = flight_runner.get_flights
+    flight_runner.get_flights = _fake_get_flights
+    try:
+        flight_runner._search_direction("2026-12-17", "LAX", "SFO", {"airlines": ["UA"]})
+        assert captured["query"].flight_data[0].airlines == ["UA"]
+
+        flight_runner._search_round_trip(
+            "2026-12-17", "2026-12-20", "LAX", "SFO", {"airlines": ["AA"]}
+        )
+        assert [leg.airlines for leg in captured["query"].flight_data] == [["AA"], ["AA"]]
+    finally:
+        flight_runner.get_flights = orig
 
 
 # ---------------------------------------------------------------------------

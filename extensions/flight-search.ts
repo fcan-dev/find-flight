@@ -112,12 +112,13 @@ const search_flights = {
 	name: "search_flights",
 	label: "Search Flights",
 	description:
-		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to airport name, city and ISO-3166 country before searching. Returns COMPACT JSON (single line). one-way: {trip, currency, route, flights[], total_flights}. round-trip: {trip, currency, outbound_route, return_route, round_trip[], return_options[], total_round_trip, total_return_options, note}. Each array holds at most 10 itineraries, cheapest first; total_* give the full result count. Each itinerary: {price (in `currency`), price_type ('round-trip-total' or 'one-way'), airlines, stops, legs[]}; each leg: {from, to, from_city, to_city, from_country, to_country, date, departure 'HH:MM', arrival 'HH:MM', duration_minutes, plane}. Round-trip semantics: round_trip[].price is the TRUE two-way total and its legs cover the OUTBOUND direction only; return_options[] are ONE-WAY reference fares for the return direction (schedule reference) - never add them to the round-trip price. Failures raise an error 'flight search failed: <reason>' where <reason> is the runner's real error (e.g. an unparseable Google page) - report it to the user or retry once; do not re-implement the search ad hoc. Always pass an explicit currency; when omitted the runner defaults to USD (env FLIGHT_CURRENCY, '' = Google default). max_stops=0 = nonstop only, applied client-side to Google's top results.",
+		"Search real Google Flights availability between two airports on given dates via fast-flights. Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to airport name, city and ISO-3166 country before searching. Returns COMPACT JSON (single line). one-way: {trip, currency, route, flights[], total_flights}. round-trip: {trip, currency, outbound_route, return_route, round_trip[], return_options[], total_round_trip, total_return_options, note}. Each array holds at most 10 itineraries, cheapest first; total_* give the full result count. Each itinerary: {price (in `currency`), price_type ('round-trip-total' or 'one-way'), airlines, stops, legs[]}; each leg: {from, to, from_city, to_city, from_country, to_country, date, departure 'HH:MM', arrival 'HH:MM', duration_minutes, plane}. Round-trip semantics: round_trip[].price is the TRUE two-way total and its legs cover the OUTBOUND direction only; return_options[] are ONE-WAY reference fares for the return direction (schedule reference) - never add them to the round-trip price. Failures raise an error 'flight search failed: <reason>' where <reason> is the runner's real error (e.g. an unparseable Google page) - report it to the user or retry once; do not re-implement the search ad hoc. Always pass an explicit currency; when omitted the runner defaults to USD (env FLIGHT_CURRENCY, '' = Google default). max_stops=0 = nonstop only, applied client-side to Google's top results. Optional `airlines` (array of 2-letter IATA carrier codes, e.g. ['UA','DL']) restricts results to those carriers; for round-trips the filter applies to the whole search.",
 	promptSnippet: "Search live Google Flights for price/availability between airports",
 	promptGuidelines: [
 		"Use search_flights for real flight prices and availability instead of guessing or writing ad-hoc scraping scripts.",
 		"Pass 3-letter IATA airport codes (from_airport/to_airport); the tool resolves each code to its airport name, city and ISO-3166 country so you can confirm a code really means the city the user wants (e.g. ECN = Ercan/Cyprus). Resolve dates to YYYY-MM-DD; ask the user if the code, trip type, or dates are unclear.",
 		"Always pass an explicit currency to search_flights (e.g. 'EUR', 'TRY', 'USD') so prices are labelled; the runner defaults to USD when omitted.",
+		"Pass `airlines` (e.g. ['UA','DL']) when the user asks for a specific carrier; omit it when they do not.",
 		"search_flights output is compact JSON: at most 10 itineraries per section (cheapest first), total_* = full counts. For round-trips, only round_trip[].price is the real two-way price; return_options[] are one-way reference fares — never sum them into the round-trip price.",
 	],
 	parameters: Type.Object({
@@ -142,10 +143,10 @@ const search_flights = {
 		children: Type.Optional(Type.Integer({ minimum: 0, maximum: 9 })),
 		airlines: Type.Optional(
 			Type.Array(
-				Type.String({ description: "3-letter IATA airline code, e.g. 'DL', 'UA', 'WN'" }),
+				Type.String({ description: "2-letter IATA airline code, e.g. 'DL', 'UA', 'WN'" }),
 				{
 					description:
-						"Restrict results to these airline(s). Pass one or more IATA carrier codes (e.g. ['DL','UA']); omit for no restriction.",
+						"Restrict results to these airline(s). Pass one or more 2-letter IATA carrier codes (e.g. ['DL','UA']); omit for no restriction. Note: for round-trips Google applies the filter to the whole search.",
 				},
 			),
 		),
